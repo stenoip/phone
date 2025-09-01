@@ -5,96 +5,198 @@
   <title>StenoCell</title>
 </head>
 <body>
-  <h1> StenoCell</h1>
+  <h1>StenoCell</h1>
 
-  <p id="myId">Loading your etikettering...</p>
+  <p id="myId">Loading your Etikettering...</p>
 
-  <input type="text" id="callee" placeholder="Enter etikettering(ID) to call">
-  <button id="callBtn">Call</button>
-  <button id="hangupBtn" disabled>Hang Up</button>
+  <div>
+    <label for="callee">Enter Etikettering to call:</label>
+    <input type="text" id="callee" placeholder="e.g., SC-abc123xyz">
+    <button id="callBtn">Call</button>
+    <button id="hangupBtn" disabled>Hang Up</button>
+  </div>
 
+  <h2>Status</h2>
   <pre id="status">Idle</pre>
-<p>&copy; 2025 Stenoip Company</p>
+
+  <h2>Audio</h2>
+  <p>Remote audio will play here when connected:</p>
+  <audio id="remoteAudio" autoplay></audio>
+
+  <footer>
+    <p>Copyright 2025 Stenoip Company</p>
+  </footer>
+
   <script>
-    // Generate or retrieve persistent device ID
+    // ——— Configuration ———
+    var WS_URL = 'wss://phone-one-iota.vercel.app'; // your signaling server URL
+    var ICE_CONFIG = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+
+    // ——— Etikettering (ID) ———
     var etikettering = localStorage.getItem('stenocell_id');
     if (!etikettering) {
       etikettering = 'SC-' + Math.random().toString(36).substr(2, 9);
       localStorage.setItem('stenocell_id', etikettering);
     }
-    document.getElementById('myId').textContent = 'Your ID: ' + etikettering;
+    document.getElementById('myId').textContent = 'Your Etikettering (ID): ' + etikettering;
 
+    // ——— Elements ———
     var statusEl = document.getElementById('status');
     var callBtn = document.getElementById('callBtn');
     var hangupBtn = document.getElementById('hangupBtn');
     var calleeInput = document.getElementById('callee');
+    var remoteAudio = document.getElementById('remoteAudio');
 
-    var pc; // RTCPeerConnection
-    var localStream;
-    var ws = new WebSocket('wss://YOUR-VERCEL-APP.vercel.app'); // Replace with your deployed server URL
+    // ——— WebRTC / Signaling state ———
+    var pc = null;
+    var localStream = null;
+    var ws = null;
 
-    ws.onopen = function() {
-      ws.send(JSON.stringify({ type: 'register', id: etikettering }));
-      statusEl.textContent = 'Connected to signaling server';
-    };
+    // ——— WebSocket setup ———
+    function connectWS() {
+      ws = new WebSocket(WS_URL);
 
-    ws.onmessage = function(event) {
-      var data = JSON.parse(event.data);
-      if (data.type === 'offer') {
-        handleOffer(data.offer, data.from);
-      } else if (data.type === 'answer') {
-        pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-      } else if (data.type === 'candidate') {
-        pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-      }
-    };
+      ws.onopen = function () {
+        statusEl.textContent = 'Connected to signaling server';
+        ws.send(JSON.stringify({ type: 'register', id: etikettering }));
+      };
 
+      ws.onmessage = function (event) {
+        var data = {};
+        try { data = JSON.parse(event.data); } catch (e) {}
+        if (!data || !data.type) return;
+
+        if (data.type === 'offer' && data.offer && data.from) {
+          handleOffer(data.offer, data.from);
+        } else if (data.type === 'answer' && data.answer) {
+          if (pc) pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        } else if (data.type === 'candidate' && data.candidate) {
+          if (pc) pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        } else if (data.type === 'bye') {
+          endCall('Remote ended the call');
+        }
+      };
+
+      ws.onclose = function () {
+        statusEl.textContent = 'Disconnected from signaling server';
+      };
+
+      ws.onerror = function (err) {
+        statusEl.textContent = 'WebSocket error';
+        console.error(err);
+      };
+    }
+    connectWS();
+
+    // ——— Helpers ———
     function createPeerConnection(targetId) {
-      pc = new RTCPeerConnection();
-      localStream.getTracks().forEach(function(track) {
+      pc = new RTCPeerConnection(ICE_CONFIG);
+
+      // Send local audio
+      localStream.getTracks().forEach(function (track) {
         pc.addTrack(track, localStream);
       });
-      pc.onicecandidate = function(event) {
-        if (event.candidate) {
+
+      // Receive remote audio
+      pc.ontrack = function (event) {
+        if (event.streams && event.streams[0]) {
+          remoteAudio.srcObject = event.streams[0];
+        }
+      };
+
+      // ICE candidates
+      pc.onicecandidate = function (event) {
+        if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'candidate',
             candidate: event.candidate,
-            to: targetId
+            to: targetId,
+            from: etikettering
           }));
+        }
+      };
+
+      pc.onconnectionstatechange = function () {
+        if (!pc) return;
+        var s = pc.connectionState;
+        if (s === 'connected') statusEl.textContent = 'Call connected';
+        if (s === 'disconnected' || s === 'failed') {
+          endCall('Call disconnected');
         }
       };
     }
 
-    async function handleOffer(offer, fromId) {
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      createPeerConnection(fromId);
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      var answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      ws.send(JSON.stringify({ type: 'answer', answer: answer, to: fromId }));
-      statusEl.textContent = 'In call with ' + fromId;
-      hangupBtn.disabled = false;
+    function endCall(message) {
+      if (pc) {
+        try { pc.getSenders().forEach(function (s) { try { s.track && s.track.stop(); } catch(e) {} }); } catch (e) {}
+        try { pc.close(); } catch (e) {}
+      }
+      pc = null;
+      if (localStream) {
+        try { localStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
+      }
+      localStream = null;
+      hangupBtn.disabled = true;
+      statusEl.textContent = message || 'Call ended';
     }
 
-    callBtn.onclick = async function() {
-      var callee = calleeInput.value.trim();
+    // ——— Incoming offer flow ———
+    async function handleOffer(offer, fromId) {
+      try {
+        statusEl.textContent = 'Incoming call from ' + fromId + '... getting microphone';
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        createPeerConnection(fromId);
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        var answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'answer', answer: answer, to: fromId, from: etikettering }));
+        }
+        statusEl.textContent = 'In call with ' + fromId;
+        hangupBtn.disabled = true; // will enable after ICE connects if desired
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = 'Failed to handle offer';
+      }
+    }
+
+    // ——— Outgoing call flow ———
+    callBtn.onclick = async function () {
+      var callee = (calleeInput.value || '').trim();
       if (!callee) {
-        alert('Enter an ID first');
+        alert('Enter an Etikettering (ID) first');
         return;
       }
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      createPeerConnection(callee);
-      var offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      ws.send(JSON.stringify({ type: 'offer', offer: offer, to: callee }));
-      statusEl.textContent = 'Calling ' + callee + '...';
-      hangupBtn.disabled = false;
+      try {
+        statusEl.textContent = 'Requesting microphone...';
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        createPeerConnection(callee);
+        var offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'offer', offer: offer, to: callee, from: etikettering }));
+        }
+        statusEl.textContent = 'Calling ' + callee + '...';
+        hangupBtn.disabled = false;
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = 'Failed to start call';
+      }
     };
 
-    hangupBtn.onclick = function() {
-      if (pc) pc.close();
-      statusEl.textContent = 'Call ended';
-      hangupBtn.disabled = true;
+    // ——— Hang up ———
+    hangupBtn.onclick = function () {
+      var callee = (calleeInput.value || '').trim();
+      if (ws && ws.readyState === WebSocket.OPEN && callee) {
+        ws.send(JSON.stringify({ type: 'bye', to: callee, from: etikettering }));
+      }
+      endCall('Call ended');
     };
   </script>
 </body>
