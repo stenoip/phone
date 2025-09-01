@@ -7,8 +7,10 @@
 <body>
   <h1>StenoCell</h1>
 
+  <!-- Display the user's Etikettering -->
   <p id="myId">Loading your Etikettering...</p>
 
+  <!-- Call controls -->
   <div>
     <label for="callee">Enter Etikettering to call:</label>
     <input type="text" id="callee" placeholder="e.g., SC-abc123xyz">
@@ -16,71 +18,30 @@
     <button id="hangupBtn" disabled>Hang Up</button>
   </div>
 
+  <!-- Status -->
   <h2>Status</h2>
   <pre id="status">Idle</pre>
 
+  <!-- Audio -->
   <h2>Audio</h2>
   <p>Remote audio will play here when connected:</p>
   <audio id="remoteAudio" autoplay></audio>
 
   <footer>
-    <p>Copyright 2025 Stenoip Company</p>
+    <p>Copyright Stenoip Company</p>
   </footer>
 
   <script>
-                      // script.js
-const WS_URL = "wss://phone-one-iota.vercel.app/api/socket";
-
-// Prompt user for their ID
-const id = prompt("Your ID (e.g., alice):")?.trim();
-
-// Create WebSocket connection
-const ws = new WebSocket(WS_URL);
-
-// When connection opens, register this client
-ws.onopen = () => {
-  if (id) {
-    ws.send(JSON.stringify({ type: "register", id }));
-    console.log(`Registered as: ${id}`);
-  } else {
-    console.warn("No ID entered — registration skipped.");
-  }
-};
-
-// Handle incoming messages
-ws.onmessage = (e) => {
-  try {
-    const msg = JSON.parse(e.data);
-    console.log("IN:", msg);
-
-    // TODO: Handle 'offer', 'answer', 'candidate' messages here
-    // Example:
-    // if (msg.type === "offer") { ... }
-  } catch (err) {
-    console.error("Error parsing message:", err);
-  }
-};
-
-// Helper functions to send signaling messages
-function sendOffer(to, offer) {
-  ws.send(JSON.stringify({ type: "offer", to, offer }));
-}
-
-function sendAnswer(to, answer) {
-  ws.send(JSON.stringify({ type: "answer", to, answer }));
-}
-
-function sendCandidate(to, candidate) {
-  ws.send(JSON.stringify({ type: "candidate", to, candidate }));
-}
-
-// Optional: keepalive ping every 25 seconds
-setInterval(() => {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "ping" }));
-  }
-}, 25000);
-
+    // Generate or retrieve persistent Etikettering
+    var etikettering = localStorage.getItem('stenocell_id');
+    if (!etikettering) {
+      etikettering = 'SC-' + Math.random().toString(36).substr(2, 9);
+      localStorage.setItem('stenocell_id', etikettering);
+    }
+    document.getElementById('myId').textContent = 'Your Etikettering (ID): ' + etikettering;
   </script>
+
+  <!-- Include the signaling logic -->
+  <script src="script.js"></script>
 </body>
 </html>
