@@ -28,6 +28,10 @@ var requestedMedia = "video";     // "video" or "audio" for incoming call
 var awaitingOffer = false;        // callee side: waiting for caller's offer
 var queuedCandidates = [];        // candidates received before remoteDescription set
 
+// Auto-reconnect
+var reconnectDelay = 2000; // 2 seconds
+var reconnectTimer = null;
+
 // Initialize after DOM loads
 window.addEventListener("DOMContentLoaded", function () {
   statusEl = document.getElementById("status");
@@ -63,6 +67,8 @@ window.addEventListener("DOMContentLoaded", function () {
 
 // Connect to signaling server and register our ID
 function connectWS() {
+  clearTimeout(reconnectTimer);
+
   ws = new WebSocket(WS_URL);
 
   ws.onopen = function () {
@@ -77,14 +83,16 @@ function connectWS() {
   };
 
   ws.onclose = function () {
-    setStatus("Disconnected from signaling server");
+    setStatus("Disconnected — retrying in " + (reconnectDelay/1000) + "s…");
+    reconnectTimer = setTimeout(connectWS, reconnectDelay);
   };
 
   ws.onerror = function () {
-    setStatus("WebSocket error");
+    setStatus("WebSocket error — retrying…");
+    try { ws.close(); } catch (e) {}
   };
 
-  // Keepalive
+  // Keepalive ping
   setInterval(function () {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "ping" }));
@@ -107,9 +115,7 @@ function handleSignal(msg) {
   }
 
   if (msg.type === "call") {
-    // Incoming call notification
     if (inCall) {
-      // Already in call -> auto busy
       sendSignal({ type: "busy", to: msg.from });
       return;
     }
@@ -121,7 +127,6 @@ function handleSignal(msg) {
   }
 
   if (msg.type === "accept") {
-    // Callee accepted; caller proceeds to create and send offer
     if (!peerId) peerId = msg.from;
     createConnectionAndOffer(peerId, requestedMedia);
     return;
@@ -140,13 +145,11 @@ function handleSignal(msg) {
   }
 
   if (msg.type === "offer" && msg.offer) {
-    // Callee receives offer
     handleIncomingOffer(msg.offer, msg.from);
     return;
   }
 
   if (msg.type === "answer" && msg.answer) {
-    // Caller receives answer
     if (pc) {
       pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
       setStatus("In call with " + (msg.from || "peer"));
@@ -179,7 +182,7 @@ function hideIncoming() {
   if (incomingBox) incomingBox.style.display = "none";
 }
 
-// Outgoing: user presses Call (video or audio)
+// Outgoing: user presses Call
 function tryStartOutgoingCall(kind) {
   if (inCall) {
     setStatus("Already in a call");
@@ -193,9 +196,7 @@ function tryStartOutgoingCall(kind) {
   peerId = target;
   requestedMedia = kind === "audio" ? "audio" : "video";
   setStatus("Calling " + peerId + " (" + requestedMedia + ")...");
-  // Notify peer to show incoming UI
   sendSignal({ type: "call", to: peerId, media: requestedMedia });
-  // Wait for "accept" from peer; then we'll create and send an offer
   hangupBtn.disabled = false;
 }
 
@@ -235,17 +236,13 @@ async function createConnectionAndOffer(targetId, kind) {
 // Callee: handle incoming offer, capture media, send answer
 async function handleIncomingOffer(offer, fromId) {
   try {
-    if (!inCall) {
-      // Safety: if user accepted quickly, inCall was set; otherwise ensure it now
-      inCall = true;
-    }
+    if (!inCall) inCall = true;
     if (!peerId) peerId = fromId;
 
     await getLocalMedia(requestedMedia);
     createPeerConnection(fromId);
 
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    // Add any queued ICE candidates after remote description is set
     flushQueuedCandidates();
 
     var answer = await pc.createAnswer();
@@ -261,15 +258,13 @@ async function handleIncomingOffer(offer, fromId) {
 function createPeerConnection(targetId) {
   pc = new RTCPeerConnection(ICE_CONFIG);
 
-  // Local tracks
   if (localStream) {
     localStream.getTracks().forEach(function (t) {
       pc.addTrack(t, localStream);
     });
   }
 
-  // Remote tracks
-  pc.ontrack = function (event) {
+    pc.ontrack = function (event) {
     if (!remoteStream) {
       remoteStream = new MediaStream();
       remoteVideo.srcObject = remoteStream;
@@ -356,6 +351,5 @@ function resetAfterCall() {
   awaitingOffer = false;
   queuedCandidates = [];
   hangupBtn.disabled = true;
-  // Keep peerId, so user can redial; clear if you prefer:
-  // peerId = null;
+  // peerId can be kept for redial or cleared here if desired
 }
