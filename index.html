@@ -28,176 +28,59 @@
   </footer>
 
   <script>
-    // ——— Configuration ———
-    var WS_URL = 'wss://phone-one-iota.vercel.app'; // your signaling server URL
-    var ICE_CONFIG = {
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-    };
+                      // script.js
+const WS_URL = "wss://phone-one-iota.vercel.app/api/socket";
 
-    // ——— Etikettering (ID) ———
-    var etikettering = localStorage.getItem('stenocell_id');
-    if (!etikettering) {
-      etikettering = 'SC-' + Math.random().toString(36).substr(2, 9);
-      localStorage.setItem('stenocell_id', etikettering);
-    }
-    document.getElementById('myId').textContent = 'Your Etikettering (ID): ' + etikettering;
+// Prompt user for their ID
+const id = prompt("Your ID (e.g., alice):")?.trim();
 
-    // ——— Elements ———
-    var statusEl = document.getElementById('status');
-    var callBtn = document.getElementById('callBtn');
-    var hangupBtn = document.getElementById('hangupBtn');
-    var calleeInput = document.getElementById('callee');
-    var remoteAudio = document.getElementById('remoteAudio');
+// Create WebSocket connection
+const ws = new WebSocket(WS_URL);
 
-    // ——— WebRTC / Signaling state ———
-    var pc = null;
-    var localStream = null;
-    var ws = null;
+// When connection opens, register this client
+ws.onopen = () => {
+  if (id) {
+    ws.send(JSON.stringify({ type: "register", id }));
+    console.log(`Registered as: ${id}`);
+  } else {
+    console.warn("No ID entered — registration skipped.");
+  }
+};
 
-    // ——— WebSocket setup ———
-    function connectWS() {
-      ws = new WebSocket(WS_URL);
+// Handle incoming messages
+ws.onmessage = (e) => {
+  try {
+    const msg = JSON.parse(e.data);
+    console.log("IN:", msg);
 
-      ws.onopen = function () {
-        statusEl.textContent = 'Connected to signaling server';
-        ws.send(JSON.stringify({ type: 'register', id: etikettering }));
-      };
+    // TODO: Handle 'offer', 'answer', 'candidate' messages here
+    // Example:
+    // if (msg.type === "offer") { ... }
+  } catch (err) {
+    console.error("Error parsing message:", err);
+  }
+};
 
-      ws.onmessage = function (event) {
-        var data = {};
-        try { data = JSON.parse(event.data); } catch (e) {}
-        if (!data || !data.type) return;
+// Helper functions to send signaling messages
+function sendOffer(to, offer) {
+  ws.send(JSON.stringify({ type: "offer", to, offer }));
+}
 
-        if (data.type === 'offer' && data.offer && data.from) {
-          handleOffer(data.offer, data.from);
-        } else if (data.type === 'answer' && data.answer) {
-          if (pc) pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        } else if (data.type === 'candidate' && data.candidate) {
-          if (pc) pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-        } else if (data.type === 'bye') {
-          endCall('Remote ended the call');
-        }
-      };
+function sendAnswer(to, answer) {
+  ws.send(JSON.stringify({ type: "answer", to, answer }));
+}
 
-      ws.onclose = function () {
-        statusEl.textContent = 'Disconnected from signaling server';
-      };
+function sendCandidate(to, candidate) {
+  ws.send(JSON.stringify({ type: "candidate", to, candidate }));
+}
 
-      ws.onerror = function (err) {
-        statusEl.textContent = 'WebSocket error';
-        console.error(err);
-      };
-    }
-    connectWS();
+// Optional: keepalive ping every 25 seconds
+setInterval(() => {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "ping" }));
+  }
+}, 25000);
 
-    // ——— Helpers ———
-    function createPeerConnection(targetId) {
-      pc = new RTCPeerConnection(ICE_CONFIG);
-
-      // Send local audio
-      localStream.getTracks().forEach(function (track) {
-        pc.addTrack(track, localStream);
-      });
-
-      // Receive remote audio
-      pc.ontrack = function (event) {
-        if (event.streams && event.streams[0]) {
-          remoteAudio.srcObject = event.streams[0];
-        }
-      };
-
-      // ICE candidates
-      pc.onicecandidate = function (event) {
-        if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: 'candidate',
-            candidate: event.candidate,
-            to: targetId,
-            from: etikettering
-          }));
-        }
-      };
-
-      pc.onconnectionstatechange = function () {
-        if (!pc) return;
-        var s = pc.connectionState;
-        if (s === 'connected') statusEl.textContent = 'Call connected';
-        if (s === 'disconnected' || s === 'failed') {
-          endCall('Call disconnected');
-        }
-      };
-    }
-
-    function endCall(message) {
-      if (pc) {
-        try { pc.getSenders().forEach(function (s) { try { s.track && s.track.stop(); } catch(e) {} }); } catch (e) {}
-        try { pc.close(); } catch (e) {}
-      }
-      pc = null;
-      if (localStream) {
-        try { localStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
-      }
-      localStream = null;
-      hangupBtn.disabled = true;
-      statusEl.textContent = message || 'Call ended';
-    }
-
-    // ——— Incoming offer flow ———
-    async function handleOffer(offer, fromId) {
-      try {
-        statusEl.textContent = 'Incoming call from ' + fromId + '... getting microphone';
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-        createPeerConnection(fromId);
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
-        var answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'answer', answer: answer, to: fromId, from: etikettering }));
-        }
-        statusEl.textContent = 'In call with ' + fromId;
-        hangupBtn.disabled = true; // will enable after ICE connects if desired
-      } catch (e) {
-        console.error(e);
-        statusEl.textContent = 'Failed to handle offer';
-      }
-    }
-
-    // ——— Outgoing call flow ———
-    callBtn.onclick = async function () {
-      var callee = (calleeInput.value || '').trim();
-      if (!callee) {
-        alert('Enter an Etikettering (ID) first');
-        return;
-      }
-      try {
-        statusEl.textContent = 'Requesting microphone...';
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-        createPeerConnection(callee);
-        var offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'offer', offer: offer, to: callee, from: etikettering }));
-        }
-        statusEl.textContent = 'Calling ' + callee + '...';
-        hangupBtn.disabled = false;
-      } catch (e) {
-        console.error(e);
-        statusEl.textContent = 'Failed to start call';
-      }
-    };
-
-    // ——— Hang up ———
-    hangupBtn.onclick = function () {
-      var callee = (calleeInput.value || '').trim();
-      if (ws && ws.readyState === WebSocket.OPEN && callee) {
-        ws.send(JSON.stringify({ type: 'bye', to: callee, from: etikettering }));
-      }
-      endCall('Call ended');
-    };
   </script>
 </body>
 </html>
