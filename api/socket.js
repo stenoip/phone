@@ -1,45 +1,44 @@
-var WebSocket = require('ws');
+// api/socket.js
+export const config = {
+  runtime: 'edge',
+};
 
-var clients = {};
+const clients = new Map(); // etiketteringId -> WebSocket
 
-module.exports = function handler(req, res) {
-  if (res.socket.server.wss) {
-    res.end();
-    return;
+export default async function handler(req) {
+  if (req.headers.get('upgrade') !== 'websocket') {
+    return new Response('Expected WebSocket', { status: 400 });
   }
 
-  var wss = new WebSocket.Server({ server: res.socket.server });
-  res.socket.server.wss = wss;
+  const { socket, response } = Deno.upgradeWebSocket(req);
+  let myId = null;
 
-  wss.on('connection', function connection(ws) {
-    ws.on('message', function incoming(message) {
-      var data = {};
-      try { data = JSON.parse(message); } catch (e) {}
+  socket.onmessage = (event) => {
+    let data;
+    try { data = JSON.parse(event.data); } catch (e) { return; }
 
-      if (data.type === 'register') {
-        clients[data.id] = ws;
-        return;
-      }
+    if (data.type === 'register' && data.id) {
+      myId = data.id;
+      clients.set(myId, socket);
+      return;
+    }
 
-      if (data.to && clients[data.to]) {
-        clients[data.to].send(JSON.stringify({
-          type: data.type,
-          offer: data.offer,
-          answer: data.answer,
-          candidate: data.candidate,
-          from: data.from || null
-        }));
-      }
-    });
+    if (data.to && clients.has(data.to)) {
+      clients.get(data.to).send(JSON.stringify({
+        type: data.type,
+        offer: data.offer,
+        answer: data.answer,
+        candidate: data.candidate,
+        from: myId
+      }));
+    }
+  };
 
-    ws.on('close', function() {
-      for (var id in clients) {
-        if (clients[id] === ws) {
-          delete clients[id];
-        }
-      }
-    });
-  });
+  socket.onclose = () => {
+    if (myId) {
+      clients.delete(myId);
+    }
+  };
 
-  res.end();
-};
+  return response;
+}
