@@ -7,41 +7,41 @@
 <body>
   <h1>StenoCell</h1>
 
-  <!-- Display the user's Etikettering -->
   <p id="myId">Loading your Etikettering...</p>
 
-  <!-- Call controls -->
+  <h2>Call</h2>
   <div>
     <label for="callee">Enter Etikettering to call:</label>
     <input type="text" id="callee" placeholder="e.g., SC-abc123xyz">
-    <button id="callBtn">Call</button>
+    <button id="callVideoBtn">Call with Video</button>
+    <button id="callAudioBtn">Call with Audio</button>
     <button id="hangupBtn" disabled>Hang Up</button>
   </div>
 
-  <!-- Status -->
+  <h2>Incoming Call</h2>
+  <div id="incoming" style="display:none;">
+    <p id="incomingText"></p>
+    <button id="acceptBtn">Accept</button>
+    <button id="declineBtn">Decline</button>
+  </div>
+
   <h2>Status</h2>
   <pre id="status">Idle</pre>
 
-  <!-- Audio -->
-  <h2>Audio</h2>
-  <p>Remote audio will play here when connected:</p>
-  <audio id="remoteAudio" autoplay></audio>
+  <h2>Video</h2>
+  <div>
+    <p>Remote stream:</p>
+    <video id="remoteVideo" autoplay playsinline></video>
+  </div>
+  <div>
+    <p>Your stream (muted):</p>
+    <video id="localVideo" autoplay playsinline muted></video>
+  </div>
 
   <footer>
     <p>Copyright Stenoip Company</p>
   </footer>
 
-  <script>
-    // Generate or retrieve persistent Etikettering
-    var etikettering = localStorage.getItem('stenocell_id');
-    if (!etikettering) {
-      etikettering = 'SC-' + Math.random().toString(36).substr(2, 9);
-      localStorage.setItem('stenocell_id', etikettering);
-    }
-    document.getElementById('myId').textContent = 'Your Etikettering (ID): ' + etikettering;
-  </script>
-
-  <!-- Include the signaling logic -->
   <script src="script.js"></script>
 </body>
 </html>
