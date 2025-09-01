@@ -1,7 +1,8 @@
 // api/socket.js
 export const config = { runtime: 'edge' };
 
-import { Redis } from '@upstash/redis';
+import { Redis } from '@upstash/redis/with-fetch';
+
 const redis = Redis.fromEnv();
 
 export default async function handler(req) {
