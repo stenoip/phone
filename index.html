@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>StenoCell</title>
+</head>
+<body>
+  <h1> StenoCell</h1>
+
+  <p id="myId">Loading your etikettering...</p>
+
+  <input type="text" id="callee" placeholder="Enter etikettering(ID) to call">
+  <button id="callBtn">Call</button>
+  <button id="hangupBtn" disabled>Hang Up</button>
+
+  <pre id="status">Idle</pre>
+<p>&copy; 2025 Stenoip Company</p>
+  <script>
+    // Generate or retrieve persistent device ID
+    var etikettering = localStorage.getItem('stenocell_id');
+    if (!etikettering) {
+      etikettering = 'SC-' + Math.random().toString(36).substr(2, 9);
+      localStorage.setItem('stenocell_id', etikettering);
+    }
+    document.getElementById('myId').textContent = 'Your ID: ' + etikettering;
+
+    var statusEl = document.getElementById('status');
+    var callBtn = document.getElementById('callBtn');
+    var hangupBtn = document.getElementById('hangupBtn');
+    var calleeInput = document.getElementById('callee');
+
+    var pc; // RTCPeerConnection
+    var localStream;
+    var ws = new WebSocket('wss://YOUR-VERCEL-APP.vercel.app'); // Replace with your deployed server URL
+
+    ws.onopen = function() {
+      ws.send(JSON.stringify({ type: 'register', id: etikettering }));
+      statusEl.textContent = 'Connected to signaling server';
+    };
+
+    ws.onmessage = function(event) {
+      var data = JSON.parse(event.data);
+      if (data.type === 'offer') {
+        handleOffer(data.offer, data.from);
+      } else if (data.type === 'answer') {
+        pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      } else if (data.type === 'candidate') {
+        pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+      }
+    };
+
+    function createPeerConnection(targetId) {
+      pc = new RTCPeerConnection();
+      localStream.getTracks().forEach(function(track) {
+        pc.addTrack(track, localStream);
+      });
+      pc.onicecandidate = function(event) {
+        if (event.candidate) {
+          ws.send(JSON.stringify({
+            type: 'candidate',
+            candidate: event.candidate,
+            to: targetId
+          }));
+        }
+      };
+    }
+
+    async function handleOffer(offer, fromId) {
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      createPeerConnection(fromId);
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      var answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      ws.send(JSON.stringify({ type: 'answer', answer: answer, to: fromId }));
+      statusEl.textContent = 'In call with ' + fromId;
+      hangupBtn.disabled = false;
+    }
+
+    callBtn.onclick = async function() {
+      var callee = calleeInput.value.trim();
+      if (!callee) {
+        alert('Enter an ID first');
+        return;
+      }
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      createPeerConnection(callee);
+      var offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'offer', offer: offer, to: callee }));
+      statusEl.textContent = 'Calling ' + callee + '...';
+      hangupBtn.disabled = false;
+    };
+
+    hangupBtn.onclick = function() {
+      if (pc) pc.close();
+      statusEl.textContent = 'Call ended';
+      hangupBtn.disabled = true;
+    };
+  </script>
+</body>
+</html>
