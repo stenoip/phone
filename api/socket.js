@@ -1,75 +1,37 @@
-// api/socket.js
-export const config = { runtime: 'edge' };
+function createSignaling(myId) {
+  const serverBase = "https://phone-one-iota.vercel.app/api";
+  let eventSource;
+  const listeners = {};
 
-import { Redis } from '@upstash/redis/cloudflare';
-
-
-const redis = Redis.fromEnv();
-
-export default async function handler(req) {
-  if (req.headers.get('upgrade') !== 'websocket') {
-    return new Response('Expected WebSocket', { status: 400 });
+  function connect() {
+    if (eventSource) eventSource.close();
+    eventSource = new EventSource(`${serverBase}/events?id=${encodeURIComponent(myId)}`);
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type && listeners[data.type]) {
+          listeners[data.type].forEach(cb => cb(data));
+        }
+      } catch (err) {
+        console.error("Bad SSE data", err);
+      }
+    };
+    eventSource.onerror = () => setTimeout(connect, 2000);
   }
 
-  const { socket, response } = Deno.upgradeWebSocket(req);
-
-  let myId = null;
-  let sub = null;
-
-  async function subscribeToSelf(id) {
-    if (sub?.close) {
-      try { await sub.close(); } catch {}
-    }
-    sub = await redis.subscribe(`ws:${id}`, (msg) => {
-      try {
-        socket.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
-      } catch {}
+  async function send(to, payload) {
+    await fetch(`${serverBase}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to, payload })
     });
   }
 
-  async function deliver(to, payload) {
-    await redis.publish(`ws:${to}`, JSON.stringify(payload));
+  function on(type, cb) {
+    if (!listeners[type]) listeners[type] = [];
+    listeners[type].push(cb);
   }
 
-  socket.onmessage = async (event) => {
-    let data;
-    try { data = JSON.parse(event.data); } catch { return; }
-
-    if (data.type === 'register' && data.id) {
-      myId = data.id;
-      await subscribeToSelf(myId);
-      await redis.set(`online:${myId}`, '1', { ex: 60 });
-      socket.send(JSON.stringify({ type: 'registered', id: myId }));
-      return;
-    }
-
-    if (!myId) {
-      socket.send(JSON.stringify({ type: 'error', reason: 'not-registered' }));
-      return;
-    }
-
-    if (data.type === 'ping') {
-      await redis.set(`online:${myId}`, '1', { ex: 60 });
-      return;
-    }
-
-    if (data.to) {
-      await deliver(data.to, { ...data, from: myId });
-    }
-  };
-
-  socket.onclose = async () => {
-    if (myId) {
-      await redis.del(`online:${myId}`);
-    }
-    if (sub?.close) {
-      try { await sub.close(); } catch {}
-    }
-  };
-
-  socket.onerror = (err) => {
-    console.error('WebSocket error', err);
-  };
-
-  return response;
+  connect();
+  return { send, on };
 }
