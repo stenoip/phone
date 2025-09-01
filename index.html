@@ -6,17 +6,12 @@
 </head>
 <body>
   <h1>StenoCell</h1>
-
   <p id="myId">Loading your Etikettering...</p>
 
   <h2>Call</h2>
-  <div>
-    <label for="callee">Enter Etikettering to call:</label>
-    <input type="text" id="callee" placeholder="e.g., SC-abc123xyz">
-    <button id="callVideoBtn">Call with Video</button>
-    <button id="callAudioBtn">Call with Audio</button>
-    <button id="hangupBtn" disabled>Hang Up</button>
-  </div>
+  <input type="text" id="callee" placeholder="Enter Etikettering to call">
+  <button id="callBtn">Call</button>
+  <button id="hangupBtn" disabled>Hang Up</button>
 
   <h2>Incoming Call</h2>
   <div id="incoming" style="display:none;">
@@ -28,20 +23,10 @@
   <h2>Status</h2>
   <pre id="status">Idle</pre>
 
-  <h2>Video</h2>
-  <div>
-    <p>Remote stream:</p>
-    <video id="remoteVideo" autoplay playsinline></video>
-  </div>
-  <div>
-    <p>Your stream (muted):</p>
-    <video id="localVideo" autoplay playsinline muted></video>
-  </div>
+  <video id="remoteVideo" autoplay playsinline></video>
+  <video id="localVideo" autoplay playsinline muted></video>
 
-  <footer>
-    <p>Copyright Stenoip Company</p>
-  </footer>
-
+  <script src="api/sockets.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
