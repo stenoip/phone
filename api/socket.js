@@ -1,62 +1,73 @@
+// api/socket.js
+export const config = { runtime: 'edge' };
 
+import { Redis } from '@upstash/redis';
+const redis = Redis.fromEnv();
 
-export default function handler(req, res) {
-  if (res.socket.server.ws) {
-    res.end();
-    return;
+export default async function handler(req) {
+  if (req.headers.get('upgrade') !== 'websocket') {
+    return new Response('Expected WebSocket', { status: 400 });
   }
 
-  const { Server } = require("ws");
-  const wss = new Server({ server: res.socket.server });
+  const { socket, response } = Deno.upgradeWebSocket(req);
 
-  // Map of ID -> WebSocket
-  const clients = {};
+  let myId = null;
+  let sub = null;
 
-  wss.on("connection", (ws) => {
-    ws.id = null;
-
-    ws.on("message", (data) => {
-      let msg;
+  async function subscribeToSelf(id) {
+    if (sub?.close) {
+      try { await sub.close(); } catch {}
+    }
+    sub = await redis.subscribe(`ws:${id}`, (msg) => {
       try {
-        msg = JSON.parse(data);
-      } catch (e) {
-        return;
-      }
-
-      // Register this connection with an ID
-      if (msg.type === "register" && msg.id) {
-        ws.id = msg.id;
-        clients[ws.id] = ws;
-        ws.send(JSON.stringify({ type: "registered", id: ws.id }));
-        return;
-      }
-
-      // Keepalive ping
-      if (msg.type === "ping") {
-        return;
-      }
-
-      // Forward any message with a "to" field
-      if (msg.to && clients[msg.to]) {
-        try {
-          clients[msg.to].send(JSON.stringify({ ...msg, from: ws.id }));
-        } catch (e) {
-          // If send fails, drop the client
-          delete clients[msg.to];
-        }
-      } else if (msg.to) {
-        // Optional: notify sender that target not found
-        ws.send(JSON.stringify({ type: "error", reason: "not-registered", to: msg.to }));
-      }
+        socket.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      } catch {}
     });
+  }
 
-    ws.on("close", () => {
-      if (ws.id && clients[ws.id]) {
-        delete clients[ws.id];
-      }
-    });
-  });
+  async function deliver(to, payload) {
+    await redis.publish(`ws:${to}`, JSON.stringify(payload));
+  }
 
-  res.socket.server.ws = wss;
-  res.end();
+  socket.onmessage = async (event) => {
+    let data;
+    try { data = JSON.parse(event.data); } catch { return; }
+
+    if (data.type === 'register' && data.id) {
+      myId = data.id;
+      await subscribeToSelf(myId);
+      await redis.set(`online:${myId}`, '1', { ex: 60 });
+      socket.send(JSON.stringify({ type: 'registered', id: myId }));
+      return;
+    }
+
+    if (!myId) {
+      socket.send(JSON.stringify({ type: 'error', reason: 'not-registered' }));
+      return;
+    }
+
+    if (data.type === 'ping') {
+      await redis.set(`online:${myId}`, '1', { ex: 60 });
+      return;
+    }
+
+    if (data.to) {
+      await deliver(data.to, { ...data, from: myId });
+    }
+  };
+
+  socket.onclose = async () => {
+    if (myId) {
+      await redis.del(`online:${myId}`);
+    }
+    if (sub?.close) {
+      try { await sub.close(); } catch {}
+    }
+  };
+
+  socket.onerror = (err) => {
+    console.error('WebSocket error', err);
+  };
+
+  return response;
 }
