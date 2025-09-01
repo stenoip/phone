@@ -1,7 +1,8 @@
 // api/socket.js
 export const config = { runtime: 'edge' };
 
-import { Redis } from '@upstash/redis/with-fetch';
+import { Redis } from '@upstash/redis/cloudflare';
+
 
 const redis = Redis.fromEnv();
 
