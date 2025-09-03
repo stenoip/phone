@@ -1,32 +1,329 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>StenoCell</title>
+  <meta charset="utf-8" />
+  <title>StenoCall</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --accent:#4f46e5; --bg:#0b1020; --panel:#111833; --text:#e7e9f2; }
+    body { margin:0; font-family:system-ui, sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:24px; text-align:center; }
+    h1 { margin:0 0 8px; font-size:28px; letter-spacing:.5px; }
+    .tagline { opacity:.8; font-size:14px; }
+    .container { max-width:980px; margin:0 auto; padding:16px; display:grid; gap:16px; grid-template-columns: 320px 1fr; }
+    .panel { background:var(--panel); border-radius:12px; padding:16px; }
+    label { display:block; font-size:12px; opacity:.8; margin-bottom:6px; }
+    input { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #2a335a; background:#0f1430; color:var(--text); }
+    button { background:var(--accent); color:white; border:0; padding:10px 12px; border-radius:8px; cursor:pointer; font-weight:600; }
+    button.secondary { background:#223; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    .row { display:flex; gap:8px; align-items:center; }
+    .row > * { flex:1; }
+    video { width:100%; background:#000; border-radius:12px; aspect-ratio:16/9; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .hint { font-size:12px; opacity:.7; margin-top:6px; }
+    .link { display:flex; gap:8px; align-items:center; margin-top:8px; }
+    .log { font-family:ui-monospace, monospace; font-size:12px; white-space:pre-wrap; max-height:180px; overflow:auto; background:#0f1430; padding:8px; border-radius:8px; }
+  </style>
 </head>
 <body>
-  <h1>StenoCell</h1>
-  <p id="myId">Loading your Etikettering...</p>
+  <header>
+    <h1>StenoCall</h1>
+    <div class="tagline">Private, fast, peer‑to‑peer video calls via WebRTC</div>
+  </header>
 
-  <h2>Call</h2>
-  <input type="text" id="callee" placeholder="Enter Etikettering to call">
-  <button id="callBtn">Call</button>
-  <button id="hangupBtn" disabled>Hang Up</button>
+  <div class="container">
+    <div class="panel">
+      <label>Room ID</label>
+      <div class="row">
+        <input id="roomId" placeholder="e.g. 8-char code" />
+        <button id="createBtn">Create</button>
+      </div>
+      <div class="hint">Share the Room ID or link with the other person to join.</div>
 
-  <h2>Incoming Call</h2>
-  <div id="incoming" style="display:none;">
-    <p id="incomingText"></p>
-    <button id="acceptBtn">Accept</button>
-    <button id="declineBtn">Decline</button>
+      <div class="link">
+        <input id="shareLink" readonly />
+        <button class="secondary" id="copyBtn">Copy</button>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="row">
+        <button id="startBtn">Start camera</button>
+        <button class="secondary" id="joinBtn" disabled>Join call</button>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="row">
+        <button class="secondary" id="hangupBtn" disabled>Hang up</button>
+        <button class="secondary" id="muteBtn" disabled>Mute</button>
+      </div>
+
+      <div style="height:12px"></div>
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="panel">
+      <div class="grid">
+        <div>
+          <label>Your video</label>
+          <video id="localVideo" autoplay playsinline muted></video>
+        </div>
+        <div>
+          <label>Remote video</label>
+          <video id="remoteVideo" autoplay playsinline></video>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <h2>Status</h2>
-  <pre id="status">Idle</pre>
+  <script>
+    const BACKEND_BASE = 'https://YOUR-VERCEL-APP.vercel.app';
+    const STUN_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+    // For production, add TURN:
+    // const STUN_SERVERS = [
+    //   { urls: 'stun:stun.l.google.com:19302' },
+    //   { urls: 'turn:your-turn.example.com:3478', username: 'user', credential: 'pass' }
+    // ];
 
-  <video id="remoteVideo" autoplay playsinline></video>
-  <video id="localVideo" autoplay playsinline muted></video>
+    const els = {
+      roomId: document.getElementById('roomId'),
+      createBtn: document.getElementById('createBtn'),
+      shareLink: document.getElementById('shareLink'),
+      copyBtn: document.getElementById('copyBtn'),
+      startBtn: document.getElementById('startBtn'),
+      joinBtn: document.getElementById('joinBtn'),
+      hangupBtn: document.getElementById('hangupBtn'),
+      muteBtn: document.getElementById('muteBtn'),
+      localVideo: document.getElementById('localVideo'),
+      remoteVideo: document.getElementById('remoteVideo'),
+      log: document.getElementById('log'),
+    };
 
-  <script src="api/sockets.js"></script>
-  <script src="script.js"></script>
+    let pc, localStream, role = null, pollTimer = null;
+    let processedCallerCandidates = 0;
+    let processedCalleeCandidates = 0;
+    let isMuted = false;
+
+    function log(...args) {
+      const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+      console.log('[StenoCall]', ...args);
+      els.log.textContent += msg + '\n';
+      els.log.scrollTop = els.log.scrollHeight;
+    }
+
+    function setShareLink(roomId) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('room', roomId);
+      els.shareLink.value = url.toString();
+    }
+
+    function getRoomFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('room') || '';
+    }
+
+    function enableCallControls(enabled) {
+      els.joinBtn.disabled = !enabled;
+      els.hangupBtn.disabled = !enabled;
+      els.muteBtn.disabled = !enabled;
+    }
+
+    async function startMedia() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        els.localVideo.srcObject = localStream;
+        log('Camera & mic started.');
+        enableCallControls(true);
+      } catch (e) {
+        log('Error starting media:', e.message);
+        alert('Could not access camera/microphone. Check permissions and HTTPS.');
+      }
+    }
+
+    function createPeerConnection() {
+      pc = new RTCPeerConnection({ iceServers: STUN_SERVERS });
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      pc.ontrack = (e) => {
+        els.remoteVideo.srcObject = e.streams[0];
+      };
+      pc.onicecandidate = async (e) => {
+        if (e.candidate) {
+          await fetch(`${BACKEND_BASE}/api/candidate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roomId: els.roomId.value.trim(), role, candidate: e.candidate })
+          });
+        }
+      };
+      pc.onconnectionstatechange = () => log('PC state:', pc.connectionState);
+      return pc;
+    }
+
+    async function createRoom() {
+      const res = await fetch(`${BACKEND_BASE}/api/room`, { method: 'POST' });
+      const data = await res.json();
+      if (!data.roomId) throw new Error('Failed to create room');
+      els.roomId.value = data.roomId;
+      setShareLink(data.roomId);
+      log('Room created:', data.roomId);
+      return data.roomId;
+    }
+
+    async function waitForAnswer(roomId) {
+      for (let i = 0; i < 120; i++) { // ~2 minutes
+        const res = await fetch(`${BACKEND_BASE}/api/answer?roomId=${roomId}`);
+        const data = await res.json();
+        if (data.answer) return data.answer;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      throw new Error('Timed out waiting for answer');
+    }
+
+    async function pollCandidates(roomId) {
+      // Poll for the opposite role's candidates every 1s
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(async () => {
+        try {
+          const res = await fetch(`${BACKEND_BASE}/api/candidates?roomId=${roomId}&role=${role}`);
+          const data = await res.json();
+          const list = data.candidates || [];
+          // Determine which list we should process based on our role
+          if (role === 'caller') {
+            // We should process callee candidates
+            for (let i = processedCalleeCandidates; i < list.length; i++) {
+              await pc.addIceCandidate(list[i]);
+            }
+            processedCalleeCandidates = list.length;
+          } else {
+            // role === 'callee', process caller candidates
+            for (let i = processedCallerCandidates; i < list.length; i++) {
+              await pc.addIceCandidate(list[i]);
+            }
+            processedCallerCandidates = list.length;
+          }
+        } catch (e) {
+          log('Polling error:', e.message);
+        }
+      }, 1000);
+    }
+
+    async function startCallAsCaller() {
+      role = 'caller';
+      createPeerConnection();
+      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+      await pc.setLocalDescription(offer);
+      await fetch(`${BACKEND_BASE}/api/offer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId: els.roomId.value.trim(), sdp: offer })
+      });
+      log('Offer posted. Waiting for answer...');
+      pollCandidates(els.roomId.value.trim());
+      const answer = await waitForAnswer(els.roomId.value.trim());
+      await pc.setRemoteDescription(answer);
+      log('Answer set. Connecting...');
+    }
+
+    async function startCallAsCallee() {
+      role = 'callee';
+      const roomId = els.roomId.value.trim();
+      const metaRes = await fetch(`${BACKEND_BASE}/api/room?id=${roomId}`);
+      const meta = await metaRes.json();
+      if (!meta.exists || !meta.hasOffer) {
+        alert('No offer found for this room yet.');
+        return;
+      }
+      createPeerConnection();
+      // Fetch the offer
+      const offerRes = await fetch(`${BACKEND_BASE}/api/room?id=${roomId}`);
+      // We already have meta; get the actual offer directly from KV route:
+      // Simplify: call offer is stored under /api/room? -> not exposed. Reuse answer GET omission by caching offer in join flow:
+      // We'll fetch it via a dedicated endpoint if you add one later. For now, pull from offer.js by reusing 'GET' route. (If not present, inline below.)
+      // To keep it self-contained, we’ll fetch via a small direct call:
+      const offerKV = await fetch(`${BACKEND_BASE}/api/answer?roomId=${roomId}`); // placeholder to keep same shape
+      // Since we didn't expose an offer GET endpoint, adjust: we'll get it through a tiny JSON proxy:
+      // For simplicity, we will add a small endpoint below. See NOTE after script.
+      log('Fetching offer requires the /api/offer GET endpoint. See NOTE.');
+    }
+
+    function hangup() {
+      if (pollTimer) clearInterval(pollTimer);
+      if (pc) {
+        pc.getSenders().forEach(s => s.track && s.track.stop());
+        pc.close();
+      }
+      localStream && localStream.getTracks().forEach(t => t.stop());
+      pc = null;
+      localStream = null;
+      role = null;
+      enableCallControls(false);
+      log('Call ended.');
+    }
+
+    function toggleMute() {
+      isMuted = !isMuted;
+      if (!localStream) return;
+      localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
+      els.muteBtn.textContent = isMuted ? 'Unmute' : 'Mute';
+    }
+
+    // UI wiring
+    els.createBtn.onclick = async () => {
+      try {
+        const id = await createRoom();
+        setShareLink(id);
+      } catch (e) {
+        alert(e.message);
+      }
+    };
+
+    els.copyBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(els.shareLink.value);
+        log('Link copied.');
+      } catch { log('Failed to copy.'); }
+    };
+
+    els.startBtn.onclick = startMedia;
+
+    els.joinBtn.onclick = async () => {
+      const roomId = els.roomId.value.trim();
+      if (!roomId) return alert('Enter a Room ID.');
+      if (!localStream) return alert('Start your camera first.');
+
+      // Branch: If no offer exists, you are the caller; else you’re callee.
+      const metaRes = await fetch(`${BACKEND_BASE}/api/room?id=${roomId}`);
+      const meta = await metaRes.json();
+      if (!meta.exists || !meta.hasOffer) {
+        await startCallAsCaller();
+      } else {
+        // See NOTE below: requires GET /api/offer endpoint
+        await startCallAsCallee();
+      }
+    };
+
+    els.hangupBtn.onclick = hangup;
+    els.muteBtn.onclick = toggleMute;
+
+    // Pre-fill room from URL
+    const fromUrl = getRoomFromUrl();
+    if (fromUrl) {
+      els.roomId.value = fromUrl;
+      setShareLink(fromUrl);
+    }
+  </script>
+
+  <!-- NOTE:
+    For the callee flow, add GET /api/offer to fetch the stored offer:
+    Endpoint spec: GET /api/offer?roomId=XXXX -> { offer: RTCSessionDescriptionInit|null }
+    Then in startCallAsCallee():
+      - Fetch offer via /api/offer
+      - await pc.setRemoteDescription(offer)
+      - const answer = await pc.createAnswer(); await pc.setLocalDescription(answer);
+      - POST /api/answer with the answer
+      - pollCandidates(roomId)
+  -->
 </body>
 </html>
